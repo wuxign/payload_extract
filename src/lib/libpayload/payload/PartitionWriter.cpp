@@ -165,13 +165,16 @@ namespace skkk {
 		if (config.httpDownload) {
 			zip.httpDownload = config.httpDownload;
 		}
+		std::future<void> progressThread;
+		const auto &extractProgress = info.extractProgress;
 		if (!config.isSilent) {
-			printProgressMT(false, info.name, info.size, 1, *info.extractProgress, false);
+			progressThread = std::async(std::launch::async, printProgressMT, config.isSilent, info.name,
+			                            info.size, static_cast<uint64_t>(1), std::ref(*extractProgress), true);
 		}
 		const bool ok = zip.extractEntryToFile(*info.zipEntry, info.outFilePath);
-		*info.extractProgress = 1;
-		if (!config.isSilent) {
-			printProgressMT(false, info.name, info.size, 1, *info.extractProgress, true);
+		++*extractProgress;
+		if (progressThread.valid()) {
+			progressThread.wait();
 		}
 		if (!ok) {
 			info.initExcInfoByInitFd(info.outFilePath, -EIO);
@@ -305,8 +308,9 @@ namespace skkk {
 			bool ret = false;
 			const auto threadNum = config.threadNum;
 			const auto isIncremental = config.isIncremental;
+			const bool zipDirect = payloadInfo->isZipDirectExtractMode();
 			printExtractConfig(threadNum, isIncremental);
-			if (threadNum > 1) {
+			if (threadNum > 1 && !zipDirect) {
 				for (const auto &info: partitions) {
 					ret = extractByInfoMT(info);
 					if (!ret) {
