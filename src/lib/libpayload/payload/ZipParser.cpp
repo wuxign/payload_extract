@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 #include <zlib.h>
@@ -28,42 +30,29 @@ namespace skkk {
 		constexpr uint16_t ZIP_COMPRESSION_STORE = 0;
 		constexpr uint16_t ZIP_COMPRESSION_DEFLATE = 8;
 
-		bool extractDeflateToFd(const ZipParser &parser, const ZipEntryDataLocation &location, int outFd,
-		                        uint64_t uncompressedSize) {
+		bool inflateBufferToFd(const uint8_t *compressed, size_t compSize, int outFd, uint64_t expectedOut,
+		                       int windowBits, uint64_t &outWritten) {
 			z_stream strm{};
-			if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) {
+			if (inflateInit2(&strm, windowBits) != Z_OK) {
 				return false;
 			}
 
-			constexpr size_t inChunk = 256 * 1024;
 			constexpr size_t outChunk = 256 * 1024;
-			std::vector<uint8_t> inBuf(inChunk);
 			std::vector<uint8_t> outBuf(outChunk);
-			uint64_t compRead = 0;
-			uint64_t outWritten = 0;
+			strm.next_in = const_cast<Bytef *>(compressed);
+			strm.avail_in = static_cast<uInt>(compSize);
+			outWritten = 0;
 			int inflateRet = Z_OK;
 
-			while (compRead < location.compressedSize || strm.avail_in > 0) {
-				if (strm.avail_in == 0 && compRead < location.compressedSize) {
-					const auto toRead = static_cast<size_t>(
-						std::min<uint64_t>(inChunk, location.compressedSize - compRead));
-					if (!parser.getFileData(inBuf.data(), location.dataOffset + compRead, toRead)) {
-						inflateEnd(&strm);
-						return false;
-					}
-					strm.next_in = inBuf.data();
-					strm.avail_in = static_cast<uInt>(toRead);
-					compRead += toRead;
-				}
-
+			while (inflateRet != Z_STREAM_END) {
 				strm.next_out = outBuf.data();
 				strm.avail_out = static_cast<uInt>(outChunk);
 				inflateRet = inflate(&strm, Z_NO_FLUSH);
 				if (inflateRet != Z_OK && inflateRet != Z_STREAM_END) {
+					LOGCE("ZIP: inflate error {} ({})", inflateRet, strm.msg ? strm.msg : "unknown");
 					inflateEnd(&strm);
 					return false;
 				}
-
 				const size_t produced = outChunk - strm.avail_out;
 				if (produced > 0) {
 					if (blobWrite(outFd, outBuf.data(), outWritten, produced) != 0) {
@@ -72,14 +61,72 @@ namespace skkk {
 					}
 					outWritten += produced;
 				}
-
-				if (inflateRet == Z_STREAM_END) {
+				if (inflateRet == Z_OK && produced == 0 && strm.avail_in == 0) {
 					break;
 				}
 			}
 			inflateEnd(&strm);
-			return inflateRet == Z_STREAM_END && outWritten == uncompressedSize &&
-			       compRead == location.compressedSize;
+			if (inflateRet != Z_STREAM_END) {
+				return false;
+			}
+			if (outWritten != expectedOut) {
+				LOGCE("ZIP: deflate size mismatch, expected {} bytes, got {}", expectedOut, outWritten);
+				return false;
+			}
+			return true;
+		}
+
+		bool extractDeflateToFd(const ZipParser &parser, const ZipEntryDataLocation &location, int outFd,
+		                        uint64_t uncompressedSize) {
+			if (location.compressedSize == 0) {
+				LOGCE("ZIP: deflate entry has zero compressed size");
+				return false;
+			}
+
+			std::vector<uint8_t> compressed;
+			if (parser.httpDownload) {
+				compressed.resize(static_cast<size_t>(location.compressedSize));
+				if (!parser.getFileData(compressed.data(), location.dataOffset, location.compressedSize)) {
+					LOGCE("ZIP: failed to download compressed data ({} bytes at offset {})",
+					      location.compressedSize, location.dataOffset);
+					return false;
+				}
+			} else {
+				constexpr uint64_t bufferThreshold = 256 * 1024 * 1024;
+				if (location.compressedSize <= bufferThreshold) {
+					compressed.resize(static_cast<size_t>(location.compressedSize));
+					if (!parser.getFileData(compressed.data(), location.dataOffset, location.compressedSize)) {
+						return false;
+					}
+				} else {
+					LOGCE("ZIP: deflate entry too large for streaming ({} bytes), use a local zip file",
+					      location.compressedSize);
+					return false;
+				}
+			}
+
+			uint64_t outWritten = 0;
+			if (inflateBufferToFd(compressed.data(), compressed.size(), outFd, uncompressedSize, -MAX_WBITS,
+			                      outWritten)) {
+				return true;
+			}
+			outWritten = 0;
+			if (payload_ftruncate(outFd, 0) == 0 &&
+			    inflateBufferToFd(compressed.data(), compressed.size(), outFd, uncompressedSize, 15, outWritten)) {
+				return true;
+			}
+			LOGCE("ZIP: deflate decompress failed (compressed {} bytes)", location.compressedSize);
+			return false;
+		}
+
+		bool ensureParentDirs(const std::string &filePath) {
+			const auto pos = filePath.find_last_of("/\\");
+			if (pos == std::string::npos || pos == 0) {
+				return true;
+			}
+			std::string dir = filePath.substr(0, pos);
+			handleWinPath(dir);
+			return mkdirs(dir.c_str(), 0755) == 0;
 		}
 
 		int extensionPriority(const std::string &filename) {
@@ -110,9 +157,24 @@ namespace skkk {
 	}
 
 	bool ZipParser::getFileData(uint8_t *data, uint64_t offset, uint64_t len) const {
+		if (len == 0) {
+			return true;
+		}
 		if (httpDownload) {
-			FileBuffer fb{data, 0};
-			return std::get<0>(httpDownload->download(fb, offset, len));
+			for (int retry = 0; retry < 4; ++retry) {
+				FileBuffer fb{data, 0};
+				if (std::get<0>(httpDownload->download(fb, offset, len))) {
+					return true;
+				}
+				if (retry < 3) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(800));
+				}
+			}
+			LOGCE("ZIP: HTTP range read failed at offset {} len {}", offset, len);
+			return false;
+		}
+		if (!fileData || offset + len > fileDataSize) {
+			return false;
 		}
 		return memcpy(data, fileData + offset, len) == data;
 	}
@@ -380,15 +442,25 @@ namespace skkk {
 		if (location.compressedSize == 0) {
 			location.compressedSize = item.compressedSize;
 		}
-		return location.dataOffset > 0 || location.uncompressedSize > 0;
+		if (location.compressionMethod == 0 && item.compression != 0) {
+			location.compressionMethod = static_cast<uint16_t>(item.compression);
+		}
+		return location.uncompressedSize > 0 && location.compressedSize > 0;
 	}
 
 	bool ZipParser::extractEntryToFile(const ZipFileItem &item, const std::string &outPath) const {
+		if (!ensureParentDirs(outPath)) {
+			LOGCE("ZIP: failed to create parent directory for '{}'", outPath);
+			return false;
+		}
 		ZipEntryDataLocation location{};
 		if (!resolveEntryDataLocation(item, location)) {
 			LOGCE("ZIP: failed to resolve entry offset for '{}'", item.name);
 			return false;
 		}
+		LOGCD("ZIP: extract '{}' method={} compressed={} uncompressed={} offset={}",
+		      item.name, location.compressionMethod, location.compressedSize,
+		      location.uncompressedSize, location.dataOffset);
 		if (location.compressionMethod != ZIP_COMPRESSION_STORE &&
 		    location.compressionMethod != ZIP_COMPRESSION_DEFLATE) {
 			LOGCE("ZIP: '{}' uses compression method {}, only stored (0) and deflate (8) are supported",

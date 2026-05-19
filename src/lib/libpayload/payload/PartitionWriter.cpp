@@ -292,7 +292,12 @@ namespace skkk {
 		return false;
 	}
 
-	static void printExtractConfig(uint32_t threadNum, bool isIncremental) {
+	static void printExtractConfig(uint32_t threadNum, bool isIncremental, bool zipDirect) {
+		if (zipDirect) {
+			LOGCI(GREEN2_BOLD("Zip direct extract, Payload ") RED2("{}") GREEN2_BOLD(" mode"),
+			      !isIncremental ? "FULL" : "INCREMENTAL");
+			return;
+		}
 		LOGCI(GREEN2_BOLD("Using ") RED2("{}")
 		      GREEN2_BOLD(" threads, Payload ") RED2("{}") GREEN2_BOLD(" mode"),
 		      threadNum, !isIncremental ? "FULL" : "INCREMENTAL");
@@ -309,7 +314,7 @@ namespace skkk {
 			const auto threadNum = config.threadNum;
 			const auto isIncremental = config.isIncremental;
 			const bool zipDirect = payloadInfo->isZipDirectExtractMode();
-			printExtractConfig(threadNum, isIncremental);
+			printExtractConfig(threadNum, isIncremental, zipDirect);
 			if (threadNum > 1 && !zipDirect) {
 				for (const auto &info: partitions) {
 					ret = extractByInfoMT(info);
