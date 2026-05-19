@@ -96,12 +96,84 @@ namespace skkk {
 
 	bool PayloadInfo::initPayloadOffsetByParseZip() {
 		if (ZipParser zip{fileData, fileDataSize}; zip.parse()) {
-			if (const auto it = std::ranges::find(zip.files, METADATA_FILENAME, &ZipFileItem::name);
-				it != zipFiles.end()) {
+			zipFiles = zip.files;
+			if (const auto it = std::ranges::find(zipFiles, METADATA_FILENAME, &ZipFileItem::name);
+			    it != zipFiles.end()) {
 				return initPayloadOffsetByFastParseZip(fileData + it->localHeaderOffset, fileDataSize);
 			}
 		}
 		return false;
+	}
+
+	bool PayloadInfo::tryInitZipDirectExtract() {
+		ZipParser zip{fileData, fileDataSize};
+		if (!zip.parse()) {
+			return false;
+		}
+		zipFiles = std::move(zip.files);
+		isZipDirectExtract = true;
+		return true;
+	}
+
+	bool PayloadInfo::parseZipPartitionInfo() {
+		ZipParser zip = fileData
+			                ? ZipParser(fileData, fileDataSize)
+			                : ZipParser(config.httpDownload);
+		zip.files = zipFiles;
+		const auto &targets = config.getTargets();
+		const auto &outConfig = config.getOutConfig();
+
+		auto addPartition = [&](const std::string &partName, const ZipFileItem &item) {
+			if (partitionInfoMap.contains(partName)) {
+				return;
+			}
+			std::string outFilePath{
+				outConfig.contains(partName)
+					? outConfig.at(partName)
+					: config.getOutDir() + "/" + partName + ".img"
+			};
+			auto &partInfo = partitionInfoMap.emplace(std::piecewise_construct, std::forward_as_tuple(partName),
+			                                          std::forward_as_tuple(partName, item.uncompressedSize,
+			                                                                outFilePath, 0,
+			                                                                "", 0, "", 0)).first->second;
+			partInfo.isZipDirectExtract = true;
+			partInfo.zipEntry = item;
+			partInfo.outErrorPath = config.getOutDir() + "/" + partName + "_err.txt";
+		};
+
+		if (!targets.empty() && !config.isExcludeMode) {
+			for (const auto &name: targets) {
+				if (const auto *entry = zip.findEntryForPartition(name)) {
+					addPartition(name, *entry);
+				} else {
+					LOGCE("ZIP: no entry matching partition '{}'", name);
+				}
+			}
+		} else {
+			for (const auto *entry: zip.findAllDirectExtractEntries()) {
+				const auto partName = ZipParser::getFilenameStem(ZipParser::getPathBasename(entry->name));
+				addPartition(partName, *entry);
+			}
+		}
+
+		if (partitionInfoMap.empty()) {
+			LOGCE("ZIP: no partition image found for direct extract");
+			return false;
+		}
+		LOGCI(GREEN2_BOLD("ZIP: direct extract mode, {} partition(s)"), partitionInfoMap.size());
+		return true;
+	}
+
+	bool PayloadInfo::isZipDirectExtractMode() const {
+		return isZipDirectExtract;
+	}
+
+	const uint8_t *PayloadInfo::getFileData() const {
+		return fileData;
+	}
+
+	uint64_t PayloadInfo::getFileDataSize() const {
+		return fileDataSize;
 	}
 
 	bool PayloadInfo::handleOffset() {
@@ -115,13 +187,17 @@ namespace skkk {
 					if (initPayloadOffsetByParseZip()) {
 						return true;
 					}
+					if (tryInitZipDirectExtract()) {
+						LOGCI("ZIP: payload.bin not found, matching partition files in zip");
+						return true;
+					}
 				} else if (memcmp(fileData, PAYLOAD_MAGIC, PAYLOAD_MAGIC_SIZE) == 0) {
 					return true;
 				}
 			}
 		}
 		LOGCE("ZIP: payload.bin not found!");
-		return true;
+		return false;
 	}
 
 	bool PayloadInfo::parseHeader() {
@@ -256,6 +332,10 @@ namespace skkk {
 	bool PayloadInfo::initPayloadInfo() {
 		if (!initPayloadFile()) goto out;
 		if (!handleOffset()) goto out;
+		if (isZipDirectExtract) {
+			if (!parseZipPartitionInfo()) goto out;
+			return true;
+		}
 		if (!parseHeader()) goto out;
 		if (!readHeaderData()) goto out;
 		if (!parseManifestData()) goto out;

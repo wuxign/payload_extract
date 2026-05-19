@@ -5,8 +5,11 @@
 #include <cinttypes>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include "ZipParser.h"
 
 namespace skkk {
 	class Extent {
@@ -125,6 +128,9 @@ namespace skkk {
 			uint32_t fecRoots = 2;
 
 			std::vector<FileOperation> operations;
+
+			bool isZipDirectExtract = false;
+			std::optional<ZipFileItem> zipEntry;
 
 			// status
 			std::shared_ptr<std::atomic_int> extractProgress = std::make_shared<std::atomic_int>(0);

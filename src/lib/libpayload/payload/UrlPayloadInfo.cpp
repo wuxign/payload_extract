@@ -51,8 +51,9 @@ namespace skkk {
 
 	bool UrlPayloadInfo::initPayloadOffsetByParseZip() {
 		if (ZipParser zip{config.httpDownload}; zip.parse()) {
-			if (const auto it = std::ranges::find(zip.files, METADATA_FILENAME, &ZipFileItem::name);
-				it != zipFiles.end()) {
+			zipFiles = zip.files;
+			if (const auto it = std::ranges::find(zipFiles, METADATA_FILENAME, &ZipFileItem::name);
+			    it != zipFiles.end()) {
 				std::string buffer;
 				buffer.reserve(HEADER_DATA_SIZE);
 				if (download(buffer, it->localHeaderOffset, HEADER_DATA_SIZE)) {
@@ -62,6 +63,16 @@ namespace skkk {
 			}
 		}
 		return false;
+	}
+
+	bool UrlPayloadInfo::tryInitZipDirectExtract() {
+		ZipParser zip{config.httpDownload};
+		if (!zip.parse()) {
+			return false;
+		}
+		zipFiles = std::move(zip.files);
+		isZipDirectExtract = true;
+		return true;
 	}
 
 	bool UrlPayloadInfo::downloadPayloadMetadata(FileBuffer &fb) {
@@ -83,7 +94,11 @@ namespace skkk {
 				if (initPayloadOffsetByParseZip() && downloadPayloadMetadata(fb)) {
 					return true;
 				}
-			} else if (memcmp(fileData, PAYLOAD_MAGIC, PAYLOAD_MAGIC_SIZE) == 0) {
+				if (tryInitZipDirectExtract()) {
+					LOGCI("URL: payload.bin not found, matching partition files in zip");
+					return true;
+				}
+			} else if (memcmp(data, PAYLOAD_MAGIC, PAYLOAD_MAGIC_SIZE) == 0) {
 				return true;
 			}
 		}

@@ -29,6 +29,7 @@ namespace skkk {
 			uint64_t payloadOffset = 0;
 			uint64_t payloadMetadataSize = 0;
 			Buffer<uint8_t> payloadMetadata;
+			bool isZipDirectExtract = false;
 
 		public:
 			std::vector<ZipFileItem> zipFiles;
@@ -58,6 +59,16 @@ namespace skkk {
 			virtual bool initPayloadOffsetByParseZip();
 
 			virtual bool handleOffset();
+
+			virtual bool tryInitZipDirectExtract();
+
+			bool parseZipPartitionInfo();
+
+			bool isZipDirectExtractMode() const;
+
+			const uint8_t *getFileData() const;
+
+			uint64_t getFileDataSize() const;
 
 			bool parseHeader();
 
@@ -96,6 +107,8 @@ namespace skkk {
 			bool downloadPayloadMetadata(FileBuffer &fb);
 
 			bool handleOffset() override;
+
+			bool tryInitZipDirectExtract() override;
 	};
 }
 

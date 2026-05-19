@@ -63,6 +63,8 @@ namespace skkk {
 
 			std::shared_ptr<VerifyWriter> getVerifyWriter();
 
+			bool extractZipEntry(const PartitionInfo &info) const;
+
 			bool extractByInfo(const PartitionInfo &info) const;
 
 			bool extractByInfoMT(const PartitionInfo &info) const;

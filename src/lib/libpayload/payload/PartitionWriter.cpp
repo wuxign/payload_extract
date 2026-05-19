@@ -45,6 +45,15 @@ namespace skkk {
 	}
 
 	void PartitionWriter::printPartitionsInfo() const {
+		if (payloadInfo->isZipDirectExtractMode()) {
+			std::cout << std::format("ZipDirectExtract: {:3} partition(s)",
+			                         payloadInfo->partitionInfoMap.size())
+					<< std::endl;
+			for (const auto &partition: partitions) {
+				partition.printInfo();
+			}
+			return;
+		}
 		auto &header = payloadInfo->pHeader;
 		std::cout << std::format("PartitionSize: {:3} MinorVersion: {:2} SecurityPatchLevel: {}",
 		                         payloadInfo->partitionInfoMap.size(), header.minorVersion,
@@ -147,7 +156,33 @@ namespace skkk {
 		return ret == 0;
 	}
 
+	bool PartitionWriter::extractZipEntry(const PartitionInfo &info) const {
+		if (!info.zipEntry) {
+			LOGCE("ZIP: missing zip entry for '{}'", info.name);
+			return false;
+		}
+		ZipParser zip{payloadInfo->getFileData(), payloadInfo->getFileDataSize()};
+		if (config.httpDownload) {
+			zip.httpDownload = config.httpDownload;
+		}
+		if (!config.isSilent) {
+			printProgressMT(false, info.name, info.size, 1, *info.extractProgress, false);
+		}
+		const bool ok = zip.extractEntryToFile(*info.zipEntry, info.outFilePath);
+		*info.extractProgress = 1;
+		if (!config.isSilent) {
+			printProgressMT(false, info.name, info.size, 1, *info.extractProgress, true);
+		}
+		if (!ok) {
+			info.initExcInfoByInitFd(info.outFilePath, -EIO);
+		}
+		return info.checkExtractionSuccessful();
+	}
+
 	bool PartitionWriter::extractByInfo(const PartitionInfo &info) const {
+		if (info.isZipDirectExtract) {
+			return extractZipEntry(info);
+		}
 		int ret = -1, inFd = -1, outFd = -1;
 		const auto *payloadBinData = payloadInfo->getPayloadData();
 		FileWriter fw{config.httpDownload};
@@ -200,6 +235,9 @@ namespace skkk {
 	}
 
 	bool PartitionWriter::extractByInfoMT(const PartitionInfo &info) const {
+		if (info.isZipDirectExtract) {
+			return extractZipEntry(info);
+		}
 		int inFd = -1, outFd = -1;
 		const auto payloadData = payloadInfo->getPayloadData();
 		const auto &extractProgress = info.extractProgress;

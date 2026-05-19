@@ -30,10 +30,19 @@ namespace skkk {
 	}
 
 	void PartitionInfo::printInfo() const {
+		if (isZipDirectExtract) {
+			const auto zipName = zipEntry ? zipEntry->name : "";
+			std::println("name: {:18} size: {:<12} zip: {}", name, size, zipName);
+			return;
+		}
 		std::println("name: {:18} size: {:<12} sha256: {}", name, size, newHashHexStr);
 	}
 
 	bool PartitionInfo::checkExtractionSuccessful() const {
+		if (isZipDirectExtract) {
+			isExtractionSuccessful = excInfos.empty() && *extractProgress >= 1;
+			return isExtractionSuccessful;
+		}
 		isExtractionSuccessful = excInfos.empty() &&
 		                         *extractProgress == operations.size();
 		return isExtractionSuccessful;

@@ -103,6 +103,13 @@ namespace skkk {
 			}
 	};
 
+	struct ZipEntryDataLocation {
+		uint64_t dataOffset = 0;
+		uint64_t compressedSize = 0;
+		uint64_t uncompressedSize = 0;
+		uint16_t compressionMethod = 0;
+	};
+
 	class ZipParser {
 		public:
 			std::shared_ptr<HttpDownload> httpDownload;
@@ -121,6 +128,22 @@ namespace skkk {
 			uint64_t getZipFileSize() const;
 
 			bool parse();
+
+			static std::string getPathBasename(const std::string &path);
+
+			static std::string getFilenameStem(const std::string &filename);
+
+			static bool partitionNameMatchesEntry(const std::string &zipEntryName, const std::string &partitionName);
+
+			static bool isLikelyDirectExtractEntry(const std::string &zipEntryName);
+
+			const ZipFileItem *findEntryForPartition(const std::string &partitionName) const;
+
+			std::vector<const ZipFileItem *> findAllDirectExtractEntries() const;
+
+			bool resolveEntryDataLocation(const ZipFileItem &item, ZipEntryDataLocation &location) const;
+
+			bool extractEntryToFile(const ZipFileItem &item, const std::string &outPath) const;
 	};
 }
 
