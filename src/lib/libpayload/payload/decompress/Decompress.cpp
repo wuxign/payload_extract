@@ -2,6 +2,7 @@
 #include <bsdiff/bspatch.h>
 #include <bzlib.h>
 #include <lzma.h>
+#include <zlib.h>
 #include <zstd.h>
 
 #include "Decompress.h"
@@ -77,5 +78,21 @@ namespace skkk {
 		ret = 0;
 	out:
 		return ret;
+	}
+
+	int Decompress::zipDeflateDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize) {
+		z_stream strm{};
+		int err = inflateInit2(&strm, -MAX_WBITS);
+		if (err != Z_OK) {
+			return -EFAULT;
+		}
+		strm.next_in = const_cast<Bytef *>(static_cast<const Bytef *>(src));
+		strm.avail_in = static_cast<uInt>(srcSize > UINT_MAX ? UINT_MAX : srcSize);
+		strm.next_out = static_cast<Bytef *>(destBuf);
+		strm.avail_out = static_cast<uInt>(destSize > UINT_MAX ? UINT_MAX : destSize);
+		err = inflate(&strm, Z_FINISH);
+		const bool ok = err == Z_STREAM_END && strm.total_out == destSize;
+		inflateEnd(&strm);
+		return ok ? 0 : -EBADMSG;
 	}
 }

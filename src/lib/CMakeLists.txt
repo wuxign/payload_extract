@@ -1,5 +1,6 @@
 include(libbspatch.cmake)
 include(libbz2.cmake)
+include(libzlib.cmake)
 include(libfec_rs.cmake)
 include(libprotobuf-cpp-full.cmake)
 

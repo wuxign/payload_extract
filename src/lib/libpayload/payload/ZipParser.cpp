@@ -1,5 +1,8 @@
 #include <algorithm>
 #include <cctype>
+#include <vector>
+
+#include <zlib.h>
 
 #include "payload/LogBase.h"
 #include "payload/Utils.h"
@@ -20,6 +23,63 @@ namespace skkk {
 				}
 			}
 			return true;
+		}
+
+		constexpr uint16_t ZIP_COMPRESSION_STORE = 0;
+		constexpr uint16_t ZIP_COMPRESSION_DEFLATE = 8;
+
+		bool extractDeflateToFd(const ZipParser &parser, const ZipEntryDataLocation &location, int outFd,
+		                        uint64_t uncompressedSize) {
+			z_stream strm{};
+			if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) {
+				return false;
+			}
+
+			constexpr size_t inChunk = 256 * 1024;
+			constexpr size_t outChunk = 256 * 1024;
+			std::vector<uint8_t> inBuf(inChunk);
+			std::vector<uint8_t> outBuf(outChunk);
+			uint64_t compRead = 0;
+			uint64_t outWritten = 0;
+			int inflateRet = Z_OK;
+
+			while (compRead < location.compressedSize || strm.avail_in > 0) {
+				if (strm.avail_in == 0 && compRead < location.compressedSize) {
+					const auto toRead = static_cast<size_t>(
+						std::min<uint64_t>(inChunk, location.compressedSize - compRead));
+					if (!parser.getFileData(inBuf.data(), location.dataOffset + compRead, toRead)) {
+						inflateEnd(&strm);
+						return false;
+					}
+					strm.next_in = inBuf.data();
+					strm.avail_in = static_cast<uInt>(toRead);
+					compRead += toRead;
+				}
+
+				strm.next_out = outBuf.data();
+				strm.avail_out = static_cast<uInt>(outChunk);
+				inflateRet = inflate(&strm, Z_NO_FLUSH);
+				if (inflateRet != Z_OK && inflateRet != Z_STREAM_END) {
+					inflateEnd(&strm);
+					return false;
+				}
+
+				const size_t produced = outChunk - strm.avail_out;
+				if (produced > 0) {
+					if (blobWrite(outFd, outBuf.data(), outWritten, produced) != 0) {
+						inflateEnd(&strm);
+						return false;
+					}
+					outWritten += produced;
+				}
+
+				if (inflateRet == Z_STREAM_END) {
+					break;
+				}
+			}
+			inflateEnd(&strm);
+			return inflateRet == Z_STREAM_END && outWritten == uncompressedSize &&
+			       compRead == location.compressedSize;
 		}
 
 		int extensionPriority(const std::string &filename) {
@@ -329,8 +389,9 @@ namespace skkk {
 			LOGCE("ZIP: failed to resolve entry offset for '{}'", item.name);
 			return false;
 		}
-		if (location.compressionMethod != 0) {
-			LOGCE("ZIP: '{}' uses compression method {}, only stored (0) entries are supported",
+		if (location.compressionMethod != ZIP_COMPRESSION_STORE &&
+		    location.compressionMethod != ZIP_COMPRESSION_DEFLATE) {
+			LOGCE("ZIP: '{}' uses compression method {}, only stored (0) and deflate (8) are supported",
 			      item.name, location.compressionMethod);
 			return false;
 		}
@@ -349,23 +410,28 @@ namespace skkk {
 			return false;
 		}
 
-		constexpr uint64_t chunkSize = 4 * 1024 * 1024;
-		std::string buffer;
-		buffer.resize(static_cast<size_t>(std::min(chunkSize, size)));
-		uint64_t written = 0;
-		bool ok = true;
-		while (written < size) {
-			const uint64_t toRead = std::min(chunkSize, size - written);
-			if (!getFileData(reinterpret_cast<uint8_t *>(buffer.data()),
-			                 location.dataOffset + written, toRead)) {
-				ok = false;
-				break;
+		bool ok = false;
+		if (location.compressionMethod == ZIP_COMPRESSION_STORE) {
+			constexpr uint64_t chunkSize = 4 * 1024 * 1024;
+			std::string buffer;
+			buffer.resize(static_cast<size_t>(std::min(chunkSize, size)));
+			uint64_t written = 0;
+			ok = true;
+			while (written < size) {
+				const uint64_t toRead = std::min(chunkSize, size - written);
+				if (!getFileData(reinterpret_cast<uint8_t *>(buffer.data()),
+				                 location.dataOffset + written, toRead)) {
+					ok = false;
+					break;
+				}
+				if (blobWrite(outFd, buffer.data(), written, toRead)) {
+					ok = false;
+					break;
+				}
+				written += toRead;
 			}
-			if (blobWrite(outFd, buffer.data(), written, toRead)) {
-				ok = false;
-				break;
-			}
-			written += toRead;
+		} else {
+			ok = extractDeflateToFd(*this, location, outFd, size);
 		}
 		closeFd(outFd);
 		if (!ok) {

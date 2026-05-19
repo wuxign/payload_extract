@@ -15,6 +15,9 @@ namespace skkk {
 			static int xzDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
 
 			static int zstdDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
+
+			/** ZIP method 8: raw deflate (no zlib wrapper). */
+			static int zipDeflateDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
 	};
 }
 
