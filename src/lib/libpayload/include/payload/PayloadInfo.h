@@ -32,6 +32,8 @@ namespace skkk {
 
 		public:
 			std::vector<ZipFileItem> zipFiles;
+			bool hasValidPayload = true;
+			uint64_t getPayloadSize() const { return fileDataSize; }
 			PayloadHeader pHeader;
 			DeltaArchiveManifest manifest;
 			PartitionInfoMap partitionInfoMap;

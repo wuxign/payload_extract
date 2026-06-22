@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <future>
 #include <getopt.h>
 #include <print>
+#include <ranges>
 #include <string>
 #include <sys/time.h>
 
@@ -9,6 +13,8 @@
 #include <payload/PartitionWriter.h>
 #include <payload/PayloadParser.h>
 #include <payload/Utils.h>
+#include <payload/ZipDirectExtractor.h>
+#include <payload/common/LogProgress.h>
 #include <payload/verify/VerifyWriter.h>
 
 #include "ExtractOperation.h"
@@ -284,6 +290,7 @@ int main(const int argc, char *argv[]) {
 	std::shared_ptr<RemoteUpdater> ru;
 	std::shared_ptr<PartitionWriter> pw;
 	std::shared_ptr<VerifyWriter> vw;
+	std::shared_ptr<PayloadInfo> payloadInfo;
 	if (parseExtractOperation(argc, argv, eo) != RET_EXTRACT_CONFIG_DONE) {
 		ret = RET_EXTRACT_INIT_FAIL;
 		goto exit;
@@ -304,6 +311,128 @@ int main(const int argc, char *argv[]) {
 	if (!payloadParser.parse(eo)) {
 		ret = RET_EXTRACT_INIT_FAIL;
 		goto exit;
+	}
+
+	payloadInfo = payloadParser.getPayloadInfo();
+
+	// Direct ZIP extraction mode (no payload.bin found in ZIP)
+	if (!payloadInfo->hasValidPayload) {
+		// Print ZIP entries if requested
+		if (eo.isPrintAll || eo.isPrintTarget) {
+			LOGCI("ZIP entries available:");
+			for (const auto &file : payloadInfo->zipFiles) {
+				std::cout << std::format("  {:20} size: {}", file.name, file.uncompressedSize) << std::endl;
+			}
+			if (eo.isPrintTarget || eo.isPrintAll) {
+				goto exit;
+			}
+		}
+
+		if (eo.isExtractAll || eo.isExtractTarget) {
+			err = eo.createExtractOutDir();
+			if (err) {
+				ret = RET_EXTRACT_CREATE_DIR_FAIL;
+				goto exit;
+			}
+
+			// Build target list from ZIP entries
+			std::vector<std::string> targets;
+			if (!eo.getTargetName().empty() && !eo.isExcludeMode) {
+				targets = eo.getTargets();
+			} else if (eo.isExtractAll) {
+				for (const auto &file : payloadInfo->zipFiles) {
+					size_t lastSlash = file.name.find_last_of("/\\");
+					std::string basename = (lastSlash == std::string::npos) ? file.name : file.name.substr(lastSlash + 1);
+					size_t lastDot = basename.find_last_of('.');
+					std::string nameWithoutExt = (lastDot == std::string::npos) ? basename : basename.substr(0, lastDot);
+					// Lowercase for case-insensitive dedup
+					std::transform(nameWithoutExt.begin(), nameWithoutExt.end(), nameWithoutExt.begin(),
+					               [](char c) { return std::tolower(static_cast<unsigned char>(c)); });
+					targets.push_back(std::move(nameWithoutExt));
+				}
+				// Remove duplicates
+				std::sort(targets.begin(), targets.end());
+				targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+			}
+
+			if (targets.empty()) {
+				LOGCE("No targets specified for direct extraction");
+				ret = RET_EXTRACT_INIT_PART_FAIL;
+				goto exit;
+			}
+
+			LOGCI(GREEN2_BOLD("Starting..."));
+
+			// Extract each target
+			for (const auto &target : targets) {
+				// Check exclude mode
+				if (eo.isExcludeMode && std::ranges::find(eo.getTargets(), target) != eo.getTargets().end()) {
+					LOGCI("Skipping excluded target: {}", target);
+					continue;
+				}
+
+				// Determine output path from --out-config or default
+				std::string outPath;
+				auto configIt = eo.getOutConfig().find(target);
+				if (configIt != eo.getOutConfig().end()) {
+					outPath = configIt->second;
+				} else {
+					outPath = eo.getOutDir() + "/" + target + ".img";
+				}
+
+				// Create progress tracking
+				auto progress = std::make_shared<std::atomic_int>(0);
+
+				// Estimate uncompressed size for progress display
+				uint64_t estimatedSize = 0;
+				for (const auto &zipFile : payloadInfo->zipFiles) {
+					size_t lastSlash = zipFile.name.find_last_of("/\\");
+					std::string basename = (lastSlash == std::string::npos) ? zipFile.name : zipFile.name.substr(lastSlash + 1);
+					size_t lastDot = basename.find_last_of('.');
+					std::string nameWithoutExt = (lastDot == std::string::npos) ? basename : basename.substr(0, lastDot);
+					// Case-insensitive comparison
+					auto ciEqual = [](const std::string &a, const std::string &b) -> bool {
+					    if (a.size() != b.size()) return false;
+					    for (size_t i = 0; i < a.size(); i++) {
+					        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+					            return false;
+					    }
+					    return true;
+					};
+					if (ciEqual(nameWithoutExt, target)) {
+						estimatedSize = zipFile.uncompressedSize;
+						break;
+					}
+				}
+				// Launch progress display thread
+				std::future<void> progressThread;
+				progressThread = std::async(std::launch::async, [isSilent = eo.isSilent, target = target, estimatedSize = estimatedSize, progress]() {
+					printProgressMT(isSilent, target, estimatedSize, 100, *progress, true);
+				});
+
+				bool success = false;
+				if (eo.isUrl && eo.httpDownload) {
+					success = ZipDirectExtractor::extractEntryUrl(
+						eo.httpDownload, target, outPath, progress, 100);
+				} else {
+					success = ZipDirectExtractor::extractEntry(
+						payloadInfo->getPayloadData(), payloadInfo->getPayloadSize(),
+						target, outPath, progress, 100);
+				}
+
+				if (progressThread.valid()) progressThread.wait();
+
+				if (success) {
+					LOGCI("{:18} result: {}", target, GREEN2_BOLD("success"));
+				} else {
+					LOGCI("{:18} result: {}", target, RED2_BOLD("failed"));
+				}
+			}
+
+			goto end;
+		}
+
+		goto end;
 	}
 
 	// PartitionWriter

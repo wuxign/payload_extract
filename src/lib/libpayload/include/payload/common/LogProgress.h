@@ -3,10 +3,19 @@
 
 #include <atomic>
 #include <cmath>
+#include <format>
 #include <string>
 #include <unistd.h>
 
+#include "payload/LogBase.h"
+
+#define PRINT_PROGRESS_FMT \
+	BROWN2_BOLD("Extract: ") "%s" \
+	GREEN2_BOLD("[ ") RED2("%2d%%") GREEN2_BOLD(" ]") \
+	"\r"
+
 namespace skkk {
+
 	static void progress(const char *tagPrefixFmt, const std::string &tag,
 	                     uint64_t totalSize, uint64_t index, int perPrint,
 	                     bool hasEnter) {
@@ -42,6 +51,20 @@ namespace skkk {
 			}
 			sleep(0);
 		} while (currProgress != totalSize);
+	}
+
+	static std::string getPrintMsg(const std::string &partName, uint64_t partSize) {
+		return std::format("{:18} size: {:<12}", partName, partSize);
+	}
+
+	static void printProgressMT(bool isSilent, const std::string &partName, uint64_t partSize,
+	                            uint64_t totalSize, const std::atomic_int &progress,
+	                            bool hasEnter) {
+		if (!isSilent) {
+			std::string tag = getPrintMsg(partName, partSize);
+			progressMT(PRINT_PROGRESS_FMT, tag,
+			           totalSize, progress, hasEnter);
+		}
 	}
 }
 

@@ -52,7 +52,7 @@ namespace skkk {
 	bool UrlPayloadInfo::initPayloadOffsetByParseZip() {
 		if (ZipParser zip{config.httpDownload}; zip.parse()) {
 			if (const auto it = std::ranges::find(zip.files, METADATA_FILENAME, &ZipFileItem::name);
-				it != zipFiles.end()) {
+				it != zip.files.end()) {
 				std::string buffer;
 				buffer.reserve(HEADER_DATA_SIZE);
 				if (download(buffer, it->localHeaderOffset, HEADER_DATA_SIZE)) {
@@ -83,6 +83,14 @@ namespace skkk {
 				if (initPayloadOffsetByParseZip() && downloadPayloadMetadata(fb)) {
 					return true;
 				}
+				hasValidPayload = false;
+				if (zipFiles.empty()) {
+					ZipParser zip{httpDownload};
+					if (zip.parse()) {
+						zipFiles = std::move(zip.files);
+					}
+				}
+				return true;
 			} else if (memcmp(fileData, PAYLOAD_MAGIC, PAYLOAD_MAGIC_SIZE) == 0) {
 				return true;
 			}

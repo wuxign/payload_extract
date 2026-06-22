@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <new>
 
 namespace skkk {
 	template<typename T>
@@ -10,9 +11,15 @@ namespace skkk {
 		uint64_t size_ = 0;
 		std::unique_ptr<T[]> data_{};
 
-		void allocate(uint64_t size) {
-			this->size_ = size;
-			this->data_ = std::make_unique<T[]>(size);
+		void allocate(uint64_t size) noexcept {
+			this->size_ = 0;
+			this->data_.reset();
+			try {
+				this->data_ = std::make_unique<T[]>(size);
+				this->size_ = size;
+			} catch (const std::bad_alloc &) {
+				// data_ stays null, size_ stays 0
+			}
 		}
 
 		void setValue(T value) {

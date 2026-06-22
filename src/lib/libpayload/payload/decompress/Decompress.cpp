@@ -1,5 +1,6 @@
 #include <brotli/decode.h>
 #include <bsdiff/bspatch.h>
+#include <zlib.h>
 #include <bzlib.h>
 #include <lzma.h>
 #include <zstd.h>
@@ -75,6 +76,31 @@ namespace skkk {
 			goto out;
 		}
 		ret = 0;
+	out:
+		return ret;
+	}
+
+	int Decompress::inflateDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize) {
+		int ret = 0;
+		z_stream strm = {};
+		int err = inflateInit2(&strm, -MAX_WBITS);
+		if (err != Z_OK) {
+			ret = -EFAULT;
+			goto out;
+		}
+		strm.next_in = static_cast<Bytef *>(const_cast<void *>(src));
+		strm.avail_in = srcSize;
+		strm.next_out = static_cast<Bytef *>(destBuf);
+		strm.avail_out = destSize;
+		err = inflate(&strm, Z_FINISH);
+		if (err != Z_STREAM_END) {
+			ret = -EBADMSG;
+			goto out_inflate_end;
+		}
+		// Success
+
+	out_inflate_end:
+		inflateEnd(&strm);
 	out:
 		return ret;
 	}

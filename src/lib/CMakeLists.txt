@@ -73,5 +73,10 @@ if (ENABLE_HTTP_CPR)
     add_subdirectory("cpr")
 endif ()
 
+# ZLIB
+set(ZLIB_BUILD_EXAMPLES OFF)
+set(ZLIB_BUILD_TESTING OFF)
+add_subdirectory(zlib)
+
 # payload
 add_subdirectory(libpayload)

@@ -55,9 +55,10 @@ target_include_directories(${TARGET}
     PRIVATE
     ${TARGET_SRC_DIR}
     "${PROJECT_SOURCE_DIR}/src/lib/xz/src/liblzma/api"
+    "${PROJECT_SOURCE_DIR}/src/lib/zlib"
 )
 
-set(COMMON_LINK_LIBS fec_rs_static bz2_static bspatch_static liblzma libzstd protobuf-cpp-full)
+set(COMMON_LINK_LIBS fec_rs_static bz2_static bspatch_static liblzma libzstd protobuf-cpp-full zlibstatic)
 if (ENABLE_HTTP_CPR)
     target_compile_definitions(${TARGET} PRIVATE "-DENABLE_HTTP_CPR")
     list(APPEND COMMON_LINK_LIBS cpr::cpr)

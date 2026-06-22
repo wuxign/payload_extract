@@ -1,6 +1,7 @@
 #ifndef PAYLOAD_EXTRACT_DECOMPRESS_H
 #define PAYLOAD_EXTRACT_DECOMPRESS_H
 
+#include <cerrno>
 #include <cinttypes>
 
 namespace skkk {
@@ -15,6 +16,8 @@ namespace skkk {
 			static int xzDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
 
 			static int zstdDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
+
+			static int inflateDecompress(const void *src, uint64_t srcSize, void *destBuf, uint64_t destSize);
 	};
 }
 

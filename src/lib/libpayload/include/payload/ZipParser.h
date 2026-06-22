@@ -1,6 +1,7 @@
 #ifndef ZIP_PARSE_H
 #define ZIP_PARSE_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -121,6 +122,20 @@ namespace skkk {
 			uint64_t getZipFileSize() const;
 
 			bool parse();
+
+		// Read entry data into output buffer. Handles decompression for deflate (method 8).
+		// When progress is provided, downloads compressed data in 1MB chunks with incremental updates.
+		bool readEntry(const ZipFileItem &item, uint8_t *output, uint64_t outputSize,
+		               std::shared_ptr<std::atomic_int> progress = nullptr, uint64_t totalProgressUnits = 0);
+
+			// Find a ZIP entry by partition name (case-insensitive, ignores extension).
+			// "boot" matches "boot.img", "boot.bin", "boot", etc.
+			// Prefers exact match: partitionName + ".img"
+			const ZipFileItem *findEntryByPartition(const std::string &partitionName) const;
+
+			// Get the data offset for a ZIP entry (where the actual file data starts).
+			// Reads the local file header to calculate the correct offset.
+			bool getEntryDataOffset(const ZipFileItem &item, uint64_t &dataOffset, uint64_t &compressedDataSize) const;
 	};
 }
 

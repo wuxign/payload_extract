@@ -97,7 +97,7 @@ namespace skkk {
 	bool PayloadInfo::initPayloadOffsetByParseZip() {
 		if (ZipParser zip{fileData, fileDataSize}; zip.parse()) {
 			if (const auto it = std::ranges::find(zip.files, METADATA_FILENAME, &ZipFileItem::name);
-				it != zipFiles.end()) {
+				it != zip.files.end()) {
 				return initPayloadOffsetByFastParseZip(fileData + it->localHeaderOffset, fileDataSize);
 			}
 		}
@@ -115,6 +115,16 @@ namespace skkk {
 					if (initPayloadOffsetByParseZip()) {
 						return true;
 					}
+					// ZIP detected but no payload.bin found - enter direct extraction mode
+					LOGCI("ZIP: no payload.bin found, entering direct extraction mode");
+					hasValidPayload = false;
+					if (zipFiles.empty()) {
+						ZipParser zip{fileData, fileDataSize};
+						if (zip.parse()) {
+							zipFiles = std::move(zip.files);
+						}
+					}
+					return true;
 				} else if (memcmp(fileData, PAYLOAD_MAGIC, PAYLOAD_MAGIC_SIZE) == 0) {
 					return true;
 				}
@@ -256,6 +266,11 @@ namespace skkk {
 	bool PayloadInfo::initPayloadInfo() {
 		if (!initPayloadFile()) goto out;
 		if (!handleOffset()) goto out;
+		// If ZIP has no payload.bin, skip payload parsing and use direct mode
+		if (!hasValidPayload) {
+			LOGCI("No payload.bin found. Will use direct ZIP extraction mode.");
+			return true;
+		}
 		if (!parseHeader()) goto out;
 		if (!readHeaderData()) goto out;
 		if (!parseManifestData()) goto out;

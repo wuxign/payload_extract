@@ -4,7 +4,7 @@
 #include <memory>
 #include <ranges>
 
-#include "common/LogProgress.h"
+#include <payload/common/LogProgress.h>
 #include "common/threadpool.h"
 #include "payload/FileWriter.h"
 #include "payload/PartitionWriter.h"
@@ -102,27 +102,6 @@ namespace skkk {
 		return verifyWriter;
 	}
 
-#define PRINT_PROGRESS_FMT \
-	BROWN2_BOLD("Extract: ") "%s" \
-	GREEN2_BOLD("[ ") RED2("%2d%%") GREEN2_BOLD(" ]") \
-	"\r"
-
-	static std::string getPrintMsg(const std::string &partName, uint64_t partSize) {
-		const std::string msg = std::format("{:18} size: {:<12}",
-		                                    partName, partSize);
-		return msg;
-	}
-
-	static void printProgressMT(bool isSilent, const std::string &partName, uint64_t partSize,
-	                            uint64_t totalSize, const std::atomic_int &progress,
-	                            bool hasEnter) {
-		if (!isSilent) {
-			std::string tag = getPrintMsg(partName, partSize);
-			progressMT(PRINT_PROGRESS_FMT, tag,
-			           totalSize, progress, hasEnter);
-		}
-	}
-
 	static bool handleData(const PartitionInfo &info, bool isIncremental, int &inFd, int &outFd,
 	                       const uint8_t *&inData, uint64_t &inDataSize, uint8_t *&outData, uint64_t &outDataSize) {
 		int ret = -1;
@@ -163,8 +142,9 @@ namespace skkk {
 			goto exit;
 		}
 
-		progressThread = std::async(std::launch::async, printProgressMT, config.isSilent, info.name,
-		                            info.size, info.operations.size(), std::ref(*extractProgress), true);
+		progressThread = std::async(std::launch::async, [isSilent = config.isSilent, name = info.name, size = info.size, opSize = info.operations.size(), extractProgress]() {
+			printProgressMT(isSilent, name, size, opSize, *extractProgress, true);
+		});
 		for (const auto &operation: info.operations) {
 			ret = fw.writeDataByType(payloadBinData, inData, outData, operation);
 			if (ret) {

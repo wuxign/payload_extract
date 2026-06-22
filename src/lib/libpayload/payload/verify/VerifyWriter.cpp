@@ -2,7 +2,7 @@
 #include <print>
 #include <ranges>
 
-#include "common/LogProgress.h"
+#include <payload/common/LogProgress.h>
 #include "common/threadpool.h"
 #include "payload/ExtractConfig.h"
 #include "payload/LogBase.h"
@@ -141,9 +141,9 @@ namespace skkk {
 
 		// wait
 		{
-			progressThread = std::async(std::launch::async, printProgressMT, config.isSilent, info.name,
-			                            HASH_TREE_FMT, info.hashTreeTotalProgress, std::ref(*currentProgress),
-			                            true);
+			progressThread = std::async(std::launch::async, [isSilent = config.isSilent, name = info.name, fmt = HASH_TREE_FMT, total = info.hashTreeTotalProgress, currentProgress]() {
+				printProgressMT(isSilent, name, fmt, total, *currentProgress, true);
+			});
 			std::vector<VerifyWriterHashTreeContext> ctxs;
 			ctxs.reserve(topLevel.blockCount);
 			std::threadpool tp{config.threadNum};
